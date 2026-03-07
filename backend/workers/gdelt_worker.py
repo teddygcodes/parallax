@@ -193,6 +193,11 @@ def ingest_gdelt(db) -> None:
                 lng = float(lng_str)
                 if lat == 0.0 and lng == 0.0:
                     continue
+                # Reject whole-number coordinates — GDELT uses these as country-centroid
+                # fallbacks when it cannot resolve a precise location (e.g. 60.0/100.0
+                # for Russia, 30.0/70.0 for Pakistan). Real events always have decimals.
+                if lat == int(lat) and lng == int(lng):
+                    continue
 
                 ts       = parse_gdelt_date(row[COL_SQLDATE])
                 url      = row[COL_URL].strip() or None
