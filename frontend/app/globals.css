@@ -1,0 +1,53 @@
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@300;400;500&family=Instrument+Serif:ital@0;1&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-void:          #0a0a0e;
+  --globe-ocean:      #0d1b2a;
+  --globe-land:       #141c26;
+  --globe-atmosphere: #1a3a5c;
+  --event-strike:     #c0392b;
+  --event-naval:      #d4a017;
+  --event-drone:      #8e44ad;
+  --event-cyber:      #00b894;
+  --confirmed:        #27ae60;
+  --unconfirmed:      #7f8c8d;
+  --disputed:         #e17055;
+  --text-primary:     #e8e6e0;
+  --text-secondary:   #8a8a8a;
+  --text-data:        #64b5f6;
+  --divergence-low:   #27ae60;
+  --divergence-mid:   #f39c12;
+  --divergence-high:  #c0392b;
+  --border-subtle:    rgba(255,255,255,0.06);
+}
+
+/* CRITICAL: zero margin/padding so globe fills full viewport — no borders against #0a0a0e */
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-void);
+  color: var(--text-primary);
+}
+
+/* App Router compatibility */
+body > div:first-child, #__next {
+  width: 100%;
+  height: 100%;
+}
+
+/* Font utility classes */
+.font-display  { font-family: 'Bebas Neue', sans-serif; }
+.font-mono     { font-family: 'IBM Plex Mono', monospace; }
+.font-serif    { font-family: 'Instrument Serif', serif; }
+/* Note: Instrument Serif is installed now for use in Loop 5/6 — not yet applied to any elements */
