@@ -79,6 +79,30 @@ export interface EventSummaryCard {
   }
 }
 
+export interface PhotoItem {
+  id: string
+  url: string
+  thumbnail_url: string | null
+  source: string
+  source_category: string
+  source_page_url: string | null
+  caption: string | null
+  provider: string
+  verification_status: string
+}
+
+export interface VideoItem {
+  id: string
+  url: string
+  thumbnail_url: string | null
+  source: string
+  source_category: string
+  source_page_url: string | null
+  caption: string | null
+  provider: string
+  verification_status: string
+}
+
 // SIGNAL v3 — event detail investigation page payload
 export interface EventDetailPayload {
   event: {
@@ -108,8 +132,8 @@ export interface EventDetailPayload {
     MIDDLE_EAST: RecentSignal[]
     OSINT:       RecentSignal[]
   }
-  photos: unknown[]
-  videos: unknown[]
+  photos: PhotoItem[]
+  videos: VideoItem[]
 }
 
 export interface Analysis {

@@ -31,6 +31,18 @@ export default function Home() {
   const router = useRouter()
   const [activeTab, setActiveTab] = useState<Tab>('GLOBE')
 
+  // Sync tab to/from URL so back-button from event pages returns to the correct tab
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const tab = params.get('tab')
+    if (tab === 'SIGNAL' || tab === 'GLOBE') setActiveTab(tab as Tab)
+  }, [])
+
+  function switchTab(tab: Tab) {
+    setActiveTab(tab)
+    window.history.replaceState({}, '', tab === 'GLOBE' ? '/' : '/?tab=SIGNAL')
+  }
+
   // Interaction state
   const [selectedEvent, setSelectedEvent] = useState<ConflictEvent | null>(null)
   const [hoveredEvent, setHoveredEvent] = useState<{ event: ConflictEvent; x: number; y: number } | null>(null)
@@ -192,7 +204,7 @@ export default function Home() {
           {(['GLOBE', 'SIGNAL'] as Tab[]).map(tab => (
             <button
               key={tab}
-              onClick={() => setActiveTab(tab)}
+              onClick={() => switchTab(tab)}
               style={{
                 fontFamily: 'IBM Plex Mono, monospace',
                 fontSize: '12px',

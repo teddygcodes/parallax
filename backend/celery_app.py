@@ -33,4 +33,8 @@ celery_app.conf.beat_schedule = {
         "task": "backend.workers.hdx_worker.ingest_hdx_task",
         "schedule": 86400.0,
     },
+    "ingest-media-every-20-minutes": {
+        "task": "backend.workers.media_worker.ingest_media_task",
+        "schedule": 1200.0,
+    },
 }

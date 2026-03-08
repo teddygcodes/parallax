@@ -1,9 +1,9 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
-import type { EventDetailPayload } from '@/types'
+import type { EventDetailPayload, PhotoItem, VideoItem, EventSummaryCard } from '@/types'
 
 const CATEGORIES = ['WESTERN', 'RUSSIAN', 'MIDDLE_EAST', 'OSINT'] as const
 type PerspectiveCat = typeof CATEGORIES[number]
@@ -56,8 +56,11 @@ type PageState =
 
 export default function EventDetailPage() {
   const params = useParams()
+  const router = useRouter()
   const id = params.id as string
   const [state, setState] = useState<PageState>({ status: 'loading' })
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [recentEvents, setRecentEvents] = useState<EventSummaryCard[]>([])
 
   useEffect(() => {
     if (!id) return
@@ -72,16 +75,24 @@ export default function EventDetailPage() {
       .catch(() => setState({ status: 'error' }))
   }, [id])
 
+  useEffect(() => {
+    fetch('/api/events/recent-summaries?limit=30')
+      .then(r => r.json())
+      .then((data: EventSummaryCard[]) => setRecentEvents(data))
+      .catch(() => {})
+  }, [])
+
   if (state.status === 'loading') return <LoadingPage />
   if (state.status === '404')    return <ErrorPage message="EVENT NOT FOUND" />
   if (state.status === 'error')  return <ErrorPage message="FAILED TO LOAD" />
 
-  const { event, ai_analysis, signals_by_category } = state.data
+  const { event, ai_analysis, signals_by_category, photos, videos } = state.data
   const typeColor = EVENT_TYPE_COLORS[event.event_type] ?? '#8a8a8a'
 
   return (
     <div style={{
-      minHeight:       '100vh',
+      height:          '100vh',
+      overflowY:       'auto',
       background:      '#0a0a0e',
       color:           '#e8e6e0',
       fontFamily:      'IBM Plex Mono, monospace',
@@ -95,16 +106,22 @@ export default function EventDetailPage() {
         padding:        '18px 32px',
         borderBottom:   '1px solid rgba(255,255,255,0.06)',
       }}>
-        <Link href="/" style={{
-          fontFamily:    'IBM Plex Mono, monospace',
-          fontSize:      '11px',
-          letterSpacing: '0.14em',
-          color:         '#8a8a8a',
-          textDecoration: 'none',
-          transition:    'color 200ms ease',
-        }}>
+        <button
+          onClick={() => router.back()}
+          style={{
+            fontFamily:    'IBM Plex Mono, monospace',
+            fontSize:      '11px',
+            letterSpacing: '0.14em',
+            color:         '#8a8a8a',
+            background:    'none',
+            border:        'none',
+            cursor:        'pointer',
+            padding:       0,
+            transition:    'color 200ms ease',
+          }}
+        >
           ← PARALLAX
-        </Link>
+        </button>
         <span style={{
           fontFamily:    'Bebas Neue, sans-serif',
           fontSize:      '18px',
@@ -293,15 +310,43 @@ export default function EventDetailPage() {
             PHOTO EVIDENCE
           </div>
           <div style={{ borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '16px' }}>
-            <div style={{
-              fontFamily: 'IBM Plex Mono, monospace',
-              fontSize:   '11px',
-              color:      '#2a2a2a',
-              textAlign:  'center',
-              padding:    '20px 0',
-            }}>
-              No photo evidence linked yet.
+            {/* Provenance note */}
+            <div style={{ fontFamily: 'IBM Plex Mono, monospace', fontSize: '9px', color: '#3a3a3a', letterSpacing: '0.12em', marginBottom: '12px' }}>
+              UNVERIFIED MEDIA · ATTACHED TO SOURCE COVERAGE
             </div>
+            {photos.length === 0 ? (
+              <div style={{ fontFamily: 'IBM Plex Mono, monospace', fontSize: '11px', color: '#2a2a2a', textAlign: 'center', padding: '20px 0' }}>
+                No photo evidence linked yet.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '8px' }}>
+                {photos.map((photo: PhotoItem) => (
+                  <div
+                    key={photo.id}
+                    onClick={() => {
+                      const target = photo.source_page_url || photo.url
+                      if (target) window.open(target, '_blank')
+                    }}
+                    style={{ flexShrink: 0, width: '180px', cursor: 'pointer' }}
+                  >
+                    <img
+                      src={photo.url}
+                      alt={photo.caption ?? photo.source}
+                      loading="lazy"
+                      style={{ width: '180px', height: '110px', objectFit: 'cover', display: 'block', background: 'rgba(255,255,255,0.04)' }}
+                    />
+                    <div style={{ fontFamily: 'IBM Plex Mono, monospace', fontSize: '9px', color: '#4a4a4a', marginTop: '5px', letterSpacing: '0.08em' }}>
+                      {photo.source.toUpperCase()} ↗
+                    </div>
+                    {photo.caption && (
+                      <div style={{ fontFamily: 'Instrument Serif, serif', fontSize: '10px', color: '#3a3a3a', marginTop: '3px', lineHeight: 1.4 }}>
+                        {photo.caption}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </section>
 
@@ -317,19 +362,184 @@ export default function EventDetailPage() {
             VIDEO EVIDENCE
           </div>
           <div style={{ borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '16px' }}>
-            <div style={{
-              fontFamily: 'IBM Plex Mono, monospace',
-              fontSize:   '11px',
-              color:      '#2a2a2a',
-              textAlign:  'center',
-              padding:    '20px 0',
-            }}>
-              No video evidence linked yet.
+            {/* Provenance note */}
+            <div style={{ fontFamily: 'IBM Plex Mono, monospace', fontSize: '9px', color: '#3a3a3a', letterSpacing: '0.12em', marginBottom: '12px' }}>
+              UNVERIFIED MEDIA · ATTACHED TO SOURCE COVERAGE
             </div>
+            {videos.length === 0 ? (
+              <div style={{ fontFamily: 'IBM Plex Mono, monospace', fontSize: '11px', color: '#2a2a2a', textAlign: 'center', padding: '20px 0' }}>
+                No video evidence linked yet.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', gap: '10px', overflowX: 'auto', paddingBottom: '8px' }}>
+                {videos.map((video: VideoItem) => (
+                  <div
+                    key={video.id}
+                    onClick={() => {
+                      const target = video.source_page_url || video.url
+                      if (target) window.open(target, '_blank')
+                    }}
+                    style={{ flexShrink: 0, width: '180px', cursor: 'pointer', position: 'relative' }}
+                  >
+                    {video.thumbnail_url ? (
+                      <img
+                        src={video.thumbnail_url}
+                        alt={video.source}
+                        loading="lazy"
+                        style={{ width: '180px', height: '110px', objectFit: 'cover', display: 'block', background: 'rgba(255,255,255,0.04)' }}
+                      />
+                    ) : (
+                      <div style={{ width: '180px', height: '110px', background: 'rgba(255,255,255,0.04)' }} />
+                    )}
+                    <div style={{
+                      position: 'absolute', top: 0, left: 0, width: '180px', height: '110px',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      background: 'rgba(0,0,0,0.35)',
+                    }}>
+                      <div style={{ fontFamily: 'IBM Plex Mono, monospace', fontSize: '18px', color: 'rgba(255,255,255,0.7)' }}>▶</div>
+                    </div>
+                    <div style={{ fontFamily: 'IBM Plex Mono, monospace', fontSize: '9px', color: '#4a4a4a', marginTop: '5px', letterSpacing: '0.08em' }}>
+                      {video.source.toUpperCase()} ↗
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </section>
 
       </div>
+
+      {/* ── Events sidebar ──────────────────────────────────────────────────── */}
+      <div style={{
+        position:   'fixed',
+        top:        0,
+        right:      0,
+        height:     '100vh',
+        width:      '252px',
+        transform:  sidebarOpen ? 'translateX(0)' : 'translateX(224px)',
+        transition: 'transform 350ms ease',
+        display:    'flex',
+        zIndex:     200,
+        pointerEvents: 'auto',
+      }}>
+        {/* Toggle tab */}
+        <div
+          onClick={() => setSidebarOpen(o => !o)}
+          style={{
+            width:          '28px',
+            flexShrink:     0,
+            background:     'rgba(10,10,14,0.97)',
+            borderLeft:     '1px solid rgba(255,255,255,0.08)',
+            borderTop:      '1px solid rgba(255,255,255,0.06)',
+            borderBottom:   '1px solid rgba(255,255,255,0.06)',
+            cursor:         'pointer',
+            display:        'flex',
+            flexDirection:  'column',
+            alignItems:     'center',
+            justifyContent: 'center',
+            gap:            '10px',
+            userSelect:     'none',
+          }}
+        >
+          <span style={{
+            fontFamily:      'IBM Plex Mono, monospace',
+            fontSize:        '8px',
+            letterSpacing:   '0.18em',
+            color:           '#3a3a3a',
+            writingMode:     'vertical-rl',
+            textOrientation: 'mixed',
+            transform:       'rotate(180deg)',
+          }}>
+            EVENTS
+          </span>
+          <span style={{
+            fontFamily: 'IBM Plex Mono, monospace',
+            fontSize:   '11px',
+            color:      '#3a3a3a',
+          }}>
+            {sidebarOpen ? '›' : '‹'}
+          </span>
+        </div>
+
+        {/* Panel */}
+        <div style={{
+          flex:       1,
+          background: 'rgba(10,10,14,0.97)',
+          borderLeft: '1px solid rgba(255,255,255,0.06)',
+          overflowY:  'auto',
+          paddingTop: '16px',
+        }}>
+          <div style={{
+            fontFamily:    'IBM Plex Mono, monospace',
+            fontSize:      '9px',
+            letterSpacing: '0.18em',
+            color:         '#3a3a3a',
+            padding:       '0 14px 10px',
+            borderBottom:  '1px solid rgba(255,255,255,0.04)',
+            marginBottom:  '6px',
+          }}>
+            RECENT EVENTS
+          </div>
+
+          {recentEvents.map(ev => {
+            const isActive = ev.event_id === id
+            const evColor  = EVENT_TYPE_COLORS[ev.event_type] ?? '#8a8a8a'
+            return (
+              <div
+                key={ev.event_id}
+                onClick={() => {
+                  if (!isActive) window.location.href = `/event/${ev.event_id}`
+                }}
+                style={{
+                  padding:     '8px 14px 8px 12px',
+                  cursor:      isActive ? 'default' : 'pointer',
+                  background:  isActive ? 'rgba(255,255,255,0.04)' : 'transparent',
+                  borderLeft:  isActive ? `2px solid ${evColor}` : '2px solid transparent',
+                  transition:  'background 180ms ease',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
+                  <span style={{
+                    fontFamily:    'IBM Plex Mono, monospace',
+                    fontSize:      '8px',
+                    letterSpacing: '0.1em',
+                    color:         evColor,
+                    border:        `1px solid ${evColor}40`,
+                    borderRadius:  '2px',
+                    padding:       '1px 4px',
+                    flexShrink:    0,
+                  }}>
+                    {ev.event_type}
+                  </span>
+                  <span style={{
+                    fontFamily: 'IBM Plex Mono, monospace',
+                    fontSize:   '8px',
+                    color:      '#2e2e2e',
+                    marginLeft: 'auto',
+                    flexShrink: 0,
+                  }}>
+                    {relativeTime(ev.newest_signal_at)}
+                  </span>
+                </div>
+                <div style={{
+                  fontFamily:           'Instrument Serif, serif',
+                  fontSize:             '11px',
+                  color:                isActive ? '#6a6a6a' : '#4a4a4a',
+                  lineHeight:           1.35,
+                  overflow:             'hidden',
+                  display:              '-webkit-box',
+                  WebkitLineClamp:      2,
+                  WebkitBoxOrient:      'vertical',
+                }}>
+                  {ev.headline_hint || ev.event_type}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
     </div>
   )
 }
@@ -471,9 +681,11 @@ function SignalCard({
 // ── Error page ─────────────────────────────────────────────────────────────────
 
 function ErrorPage({ message }: { message: string }) {
+  const router = useRouter()
   return (
     <div style={{
-      minHeight:      '100vh',
+      height:         '100vh',
+      overflowY:      'auto',
       background:     '#0a0a0e',
       display:        'flex',
       flexDirection:  'column',
@@ -489,15 +701,21 @@ function ErrorPage({ message }: { message: string }) {
       }}>
         {message}
       </div>
-      <Link href="/" style={{
-        fontFamily:    'IBM Plex Mono, monospace',
-        fontSize:      '10px',
-        letterSpacing: '0.12em',
-        color:         '#8a8a8a',
-        textDecoration: 'none',
-      }}>
+      <button
+        onClick={() => router.back()}
+        style={{
+          fontFamily:    'IBM Plex Mono, monospace',
+          fontSize:      '10px',
+          letterSpacing: '0.12em',
+          color:         '#8a8a8a',
+          background:    'none',
+          border:        'none',
+          cursor:        'pointer',
+          padding:       0,
+        }}
+      >
         ← PARALLAX
-      </Link>
+      </button>
     </div>
   )
 }
@@ -506,7 +724,7 @@ function ErrorPage({ message }: { message: string }) {
 
 function LoadingPage() {
   return (
-    <div style={{ minHeight: '100vh', background: '#0a0a0e' }}>
+    <div style={{ height: '100vh', overflowY: 'auto', background: '#0a0a0e' }}>
       {/* Skeleton top bar */}
       <div style={{
         display:      'flex',

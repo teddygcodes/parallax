@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 from ..database import get_db
-from ..models import Event, Signal, SourceCategory, EventType, ConfidenceLevel
+from ..models import Event, Signal, SourceCategory, EventType, ConfidenceLevel, MediaItem
 from ..services.ai_analysis import get_analysis
 from ..config import settings
 from datetime import datetime, timezone
@@ -436,6 +436,28 @@ def get_event_detail(event_id: str, db: Session = Depends(get_db)):
             })
             seen_ids.add(s.id)
 
+    # Media items — newest-extracted first; always return arrays, never null.
+    # created_at.desc() is a UX choice (newest-extracted-first), not a quality ranking.
+    media_items = (
+        db.query(MediaItem)
+        .filter(MediaItem.event_id == event_id)
+        .order_by(MediaItem.created_at.desc())
+        .all()
+    )
+
+    def _media_dict(m: MediaItem) -> dict:
+        return {
+            "id":                  m.id,
+            "url":                 m.origin_url,
+            "thumbnail_url":       m.thumbnail_url,
+            "source":              m.source,
+            "source_category":     m.source_category,
+            "source_page_url":     m.source_page_url,
+            "caption":             m.caption,
+            "provider":            m.provider,
+            "verification_status": m.verification_status,
+        }
+
     return {
         "event": {
             "event_id":             event.id,
@@ -465,8 +487,8 @@ def get_event_detail(event_id: str, db: Session = Depends(get_db)):
         # signals_by_category must always contain all four keys, even when all arrays are empty.
         "signals_by_category": by_cat,
         # photos and videos must always be present as arrays — never omitted, never null.
-        "photos": [],
-        "videos": [],
+        "photos": [_media_dict(m) for m in media_items if m.media_type == "PHOTO"],
+        "videos": [_media_dict(m) for m in media_items if m.media_type == "VIDEO"],
     }
 
 
