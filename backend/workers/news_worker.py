@@ -1,214 +1,289 @@
 """
-News Worker — ingests signals (news articles) for each event.
-When NEWSAPI_KEY is set: calls real NewsAPI.
-When not set: generates mock signals from multiple source categories per event.
+NewsAPI Worker — ingests multi-perspective news articles every 10 minutes.
+One broad page fetch per run (not per-event regional calls).
+Attaches articles as Signal records to existing events via keyword matching.
+Covers Western, Middle East, Russian, and OSINT source categories.
+Requires NEWSAPI_KEY in environment. No mock fallback — logs and returns if key missing.
 """
-import uuid
-from datetime import datetime, timezone, timedelta
-from sqlalchemy.orm import Session
+import requests
+from datetime import datetime, timezone
+from urllib.parse import urlparse
+
 from backend.models import Event, Signal, SourceCategory
+from backend.workers.ingest_utils import make_signal_id, truncate
 from backend.config import settings
 
-# Templates keyed by source category: list of (source_name, text_template) tuples
-MOCK_SIGNAL_TEMPLATES = {
-    "WESTERN": [
-        ("Reuters", "{event_type} confirmed at {region}. Military sources cited."),
-        ("AP", "Attack reported in {region}. Damage assessment ongoing."),
-        ("BBC", "Strike reported near {region}. Officials have not commented."),
-    ],
-    "RUSSIAN": [
-        ("RT", "Attack on civilian infrastructure in {region}. No military targets confirmed."),
-        ("TASS", "Western-backed forces strike {region}. Civilian casualties reported."),
-    ],
-    "MIDDLE_EAST": [
-        ("Al Jazeera", "Explosion in {region}. Conflicting accounts from officials."),
-        ("IRNA", "Attack reported in {region} region. Resistance groups claim responsibility."),
-    ],
-    "OSINT": [
-        ("Bellingcat", "Geolocated video confirms strike at {region} coordinates."),
-        ("IntelliTimes", "OSINT analysis: {event_type} activity confirmed via satellite."),
-    ],
-    "LOCAL": [
-        ("Local Telegram", "Large blast heard in {region} district."),
-    ],
+NEWSAPI_URL  = "https://newsapi.org/v2/everything"
+HEADERS      = {"User-Agent": "PARALLAX/news-ingestion"}
+
+SEARCH_QUERY = (
+    "war OR strike OR airstrike OR missile OR drone OR ceasefire OR offensive OR "
+    "shelling OR casualties OR conflict OR military OR attack OR explosion"
+)
+
+# Outlet domains → SourceCategory string value.
+# URL-based mapping is more reliable than source name string matching.
+# Unknown domains default to WESTERN — temporary fallback due to enum limitations.
+OUTLET_CATEGORY_MAP = {
+    # WESTERN
+    "reuters.com":          "WESTERN",
+    "apnews.com":           "WESTERN",
+    "bbc.com":              "WESTERN",
+    "bbc.co.uk":            "WESTERN",
+    "theguardian.com":      "WESTERN",
+    "nytimes.com":          "WESTERN",
+    "washingtonpost.com":   "WESTERN",
+    "cnn.com":              "WESTERN",
+    "nbcnews.com":          "WESTERN",
+    "abcnews.go.com":       "WESTERN",
+    "france24.com":         "WESTERN",
+    "dw.com":               "WESTERN",
+    # MIDDLE_EAST
+    "aljazeera.com":        "MIDDLE_EAST",
+    "middleeasteye.net":    "MIDDLE_EAST",
+    "arabnews.com":         "MIDDLE_EAST",
+    "timesofisrael.com":    "MIDDLE_EAST",
+    "haaretz.com":          "MIDDLE_EAST",
+    "daily-star.com.lb":    "MIDDLE_EAST",
+    # RUSSIAN
+    "tass.com":             "RUSSIAN",
+    "rt.com":               "RUSSIAN",
+    "sputniknews.com":      "RUSSIAN",
+    "ria.ru":               "RUSSIAN",
+    # OSINT
+    "bellingcat.com":       "OSINT",
+    "understandingwar.org": "OSINT",
+    "kyivindependent.com":  "OSINT",
+    "ukraineworld.org":     "OSINT",
 }
 
-# Which categories to sample for each event (cycle through to ensure diversity)
-CATEGORY_ORDER = ["WESTERN", "RUSSIAN", "MIDDLE_EAST", "OSINT", "LOCAL"]
+# Keyword → location terms to match against existing signal descriptions.
+CONFLICT_KEYWORDS = {
+    "ukraine":       ["Ukraine", "Kyiv", "Kharkiv", "Donetsk", "Zaporizhzhia"],
+    "kyiv":          ["Ukraine", "Kyiv"],
+    "kharkiv":       ["Ukraine", "Kharkiv"],
+    "donetsk":       ["Ukraine", "Donetsk"],
+    "gaza":          ["Gaza", "Palestine"],
+    "west bank":     ["West Bank", "Palestine"],
+    "israel":        ["Israel"],
+    "jerusalem":     ["Israel", "Jerusalem"],
+    "syria":         ["Syria", "Damascus"],
+    "damascus":      ["Syria", "Damascus"],
+    "lebanon":       ["Lebanon", "Beirut"],
+    "beirut":        ["Lebanon", "Beirut"],
+    "yemen":         ["Yemen"],
+    "iraq":          ["Iraq", "Baghdad"],
+    "baghdad":       ["Iraq", "Baghdad"],
+    "sudan":         ["Sudan"],
+    "somalia":       ["Somalia"],
+    "mali":          ["Mali"],
+    "myanmar":       ["Myanmar"],
+    "ethiopia":      ["Ethiopia"],
+    "nigeria":       ["Nigeria"],
+    "congo":         ["Congo", "DRC"],
+    "afghanistan":   ["Afghanistan"],
+    "pakistan":      ["Pakistan"],
+    "russia":        ["Russia"],
+    "haiti":         ["Haiti"],
+    "libya":         ["Libya"],
+}
 
 
-def _region_name_for_event(event: Event) -> str:
-    """Best-effort region label based on coordinates."""
-    lat, lng = event.lat, event.lng
-
-    if 30.0 <= lat <= 32.5 and 33.0 <= lng <= 36.0:
-        return "Gaza"
-    if 31.0 <= lat <= 32.0 and 34.5 <= lng <= 36.5:
-        return "West Bank"
-    if 33.0 <= lat <= 34.5 and 35.0 <= lng <= 37.0:
-        return "Lebanon"
-    if 33.0 <= lat <= 34.0 and 35.5 <= lng <= 37.5:
-        return "Damascus"
-    if 35.0 <= lat <= 37.5 and 36.0 <= lng <= 38.5:
-        return "Syria"
-    if 47.0 <= lat <= 52.0 and 22.0 <= lng <= 40.0:
-        return "Ukraine"
-    if 50.0 <= lat <= 51.0 and 30.0 <= lng <= 31.5:
-        return "Kyiv"
-    if 47.0 <= lat <= 49.0 and 37.0 <= lng <= 40.0:
-        return "Donbas"
-    if 12.0 <= lat <= 14.0 and 43.0 <= lng <= 45.0:
-        return "Red Sea"
-    if 15.0 <= lat <= 16.0 and 44.0 <= lng <= 45.0:
-        return "Yemen"
-    if 13.0 <= lat <= 14.0 and 43.5 <= lng <= 44.5:
-        return "Hodeida"
-    if 15.0 <= lat <= 16.5 and 32.0 <= lng <= 33.5:
-        return "Sudan"
-    return f"{lat:.2f}°N {lng:.2f}°E"
+def _extract_domain(url: str) -> str | None:
+    """Extract bare domain from URL, stripping www. Returns None on failure.
+    endswith() loop in _get_source_category handles subdomains (e.g. edition.cnn.com).
+    """
+    try:
+        host = urlparse(url).netloc.lower()
+        return host[4:] if host.startswith("www.") else host
+    except Exception:
+        return None
 
 
-def _signals_exist_for_event(db: Session, event_id: str) -> bool:
-    """Return True if signals already exist for this event."""
-    return db.query(Signal).filter(Signal.event_id == event_id).count() > 0
+def _get_source_category(url: str | None) -> str:
+    """Map article URL domain to a SourceCategory string value.
+    Unknown domains default to WESTERN — temporary fallback due to enum limitations.
+    """
+    if not url:
+        return "WESTERN"
+    domain = _extract_domain(url)
+    if not domain:
+        return "WESTERN"
+    if domain in OUTLET_CATEGORY_MAP:
+        return OUTLET_CATEGORY_MAP[domain]
+    for known, category in OUTLET_CATEGORY_MAP.items():
+        if domain == known or domain.endswith("." + known):
+            return category
+    return "WESTERN"  # fallback — may overclassify unknown outlets as Western
 
 
-def ingest_news(db: Session) -> None:
-    """Main entry point: uses real NewsAPI if key is set, else generates mock signals."""
-    if settings.newsapi_key:
-        _ingest_real_news(db)
-    else:
-        _ingest_mock_news(db)
+def _find_matching_events(db, article_text: str) -> list[Event]:
+    """
+    Return up to 2 best-matching events for this article.
+    Events are scored by number of unique matched location terms.
+    Uses two flat queries (events + signals) — no per-event N+1.
+    Keyword routing is heuristic — article is skipped if no existing event text matches.
+    """
+    text_lower = article_text.lower()
+    matched_terms = []
+
+    for keyword, location_terms in CONFLICT_KEYWORDS.items():
+        if keyword in text_lower:
+            matched_terms.extend(location_terms)
+
+    if not matched_terms:
+        return []
+
+    # Load all events and all their signals in two queries.
+    # .in_(event_ids) is acceptable at current event volume; chunk if events grow materially.
+    all_events = db.query(Event).all()
+    if not all_events:
+        return []
+
+    event_ids = [e.id for e in all_events]
+    all_signals = db.query(Signal).filter(Signal.event_id.in_(event_ids)).all()
+
+    # Group signal text by event_id in Python — no further DB calls
+    signal_text_by_event: dict[str, str] = {}
+    for s in all_signals:
+        existing = signal_text_by_event.get(s.event_id, "")
+        signal_text_by_event[s.event_id] = (
+            existing
+            + " " + (s.description or "")
+            + " " + (s.coordinates_mentioned or "")
+        ).lower()
+
+    # Deduplicate terms before scoring — prevents overcount from overlapping keywords
+    unique_terms = {term.lower() for term in matched_terms}
+
+    # Score each event by number of unique matched location terms
+    scored = []
+    for event in all_events:
+        event_text = signal_text_by_event.get(event.id, "")
+        hit_count = sum(1 for term in unique_terms if term in event_text)
+        if hit_count > 0:
+            scored.append((hit_count, event))
+
+    # Sort by match strength descending, return top 2
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [ev for _, ev in scored[:2]]
 
 
-def _ingest_mock_news(db: Session) -> None:
-    """Generate 3-5 signals per event from different source categories."""
-    events = db.query(Event).filter(~Event.id.like("EVT-TEST-%")).all()
-    total_inserted = 0
+def _fetch_articles() -> list[dict]:
+    """Fetch conflict articles from NewsAPI — one broad page per run.
+    Returns empty list on any failure, including rate limits.
+    """
+    if not settings.newsapi_key:
+        print("[news_worker] NEWSAPI_KEY not set — skipping.")
+        return []
 
-    for event in events:
-        # Skip if signals already exist
-        if _signals_exist_for_event(db, event.id):
-            continue
+    try:
+        resp = requests.get(
+            NEWSAPI_URL,
+            params={
+                "q":        SEARCH_QUERY,
+                "language": "en",
+                "sortBy":   "publishedAt",
+                "pageSize": 100,
+                "apiKey":   settings.newsapi_key,
+            },
+            timeout=20,
+            headers=HEADERS,
+        )
+        if resp.status_code == 429:
+            print("[news_worker] Rate limited (429) — skipping.")
+            return []
+        resp.raise_for_status()
+        data = resp.json()
 
-        region = _region_name_for_event(event)
-        event_type_label = event.event_type.value
+        if data.get("status") != "ok":
+            print(f"[news_worker] API error: {data.get('message', 'unknown')} — skipping.")
+            return []
 
-        # Select 3-5 categories to generate signals from
-        # Always include WESTERN, RUSSIAN, OSINT; optionally add MIDDLE_EAST and LOCAL
-        selected_categories = ["WESTERN", "RUSSIAN", "OSINT"]
-        # Add MIDDLE_EAST for Middle East / Africa events
-        if event.lat < 42.0 and 25.0 <= event.lng <= 60.0:
-            selected_categories.append("MIDDLE_EAST")
-        # Always include LOCAL
-        selected_categories.append("LOCAL")
+        return data.get("articles", [])
 
-        base_time = event.first_detection_time
-
-        for cat_offset, category in enumerate(selected_categories):
-            templates = MOCK_SIGNAL_TEMPLATES[category]
-            # Use first template per category for determinism
-            source_name, text_template = templates[0]
-            description = text_template.format(
-                region=region,
-                event_type=event_type_label,
-            )
-            signal_time = base_time + timedelta(minutes=(cat_offset + 1) * 7)
-
-            signal = Signal(
-                id=str(uuid.uuid4()),
-                event_id=event.id,
-                source=source_name,
-                source_category=SourceCategory(category),
-                published_at=signal_time,
-                description=description,
-            )
-            db.add(signal)
-            total_inserted += 1
-
-        db.flush()
-
-    db.commit()
-    print(f"[news_worker] Inserted {total_inserted} mock signals across {len(events)} events.")
+    except Exception as exc:
+        print(f"[news_worker] Fetch failed: {exc} — skipping.")
+        return []
 
 
-def _ingest_real_news(db: Session) -> None:
-    """Fetch real news articles from NewsAPI for each event's region."""
-    import requests
+def ingest_news(db) -> None:
+    articles = _fetch_articles()
+    if not articles:
+        return
 
-    events = db.query(Event).filter(~Event.id.like("EVT-TEST-%")).all()
-    total_inserted = 0
+    inserted = 0
+    skipped_no_match = 0
 
-    for event in events:
-        if _signals_exist_for_event(db, event.id):
-            continue
-
-        region = _region_name_for_event(event)
-        url = "https://newsapi.org/v2/everything"
-        params = {
-            "q": region,
-            "apiKey": settings.newsapi_key,
-            "pageSize": 5,
-            "sortBy": "publishedAt",
-            "language": "en",
-        }
-
+    for article in articles:
         try:
-            response = requests.get(url, params=params, timeout=15)
-            response.raise_for_status()
-            articles = response.json().get("articles", [])
-        except Exception as e:
-            print(f"[news_worker] NewsAPI error for {region}: {e}. Skipping.")
-            continue
+            title        = article.get("title") or ""
+            description  = article.get("description") or ""
+            url          = article.get("url") or None
+            source_name  = (article.get("source") or {}).get("name") or "Unknown"
+            published    = article.get("publishedAt") or ""
 
-        for article in articles[:5]:
-            try:
-                published_at_str = article.get("publishedAt", "")
-                published_at = datetime.fromisoformat(
-                    published_at_str.replace("Z", "+00:00")
-                ) if published_at_str else datetime.now(timezone.utc)
-
-                source_name = article.get("source", {}).get("name", "Unknown")
-                description = article.get("description") or article.get("title") or ""
-
-                # Assign source category heuristically
-                source_lower = source_name.lower()
-                if any(s in source_lower for s in ["rt", "tass", "sputnik", "ria"]):
-                    category = SourceCategory.RUSSIAN
-                elif any(s in source_lower for s in ["jazeera", "irna", "press tv", "presstv"]):
-                    category = SourceCategory.MIDDLE_EAST
-                elif any(s in source_lower for s in ["bellingcat", "osint", "intelli"]):
-                    category = SourceCategory.OSINT
-                elif any(s in source_lower for s in ["telegram", "local", "regional"]):
-                    category = SourceCategory.LOCAL
-                else:
-                    category = SourceCategory.WESTERN
-
-                signal = Signal(
-                    id=str(uuid.uuid4()),
-                    event_id=event.id,
-                    source=source_name,
-                    source_category=category,
-                    article_url=article.get("url"),
-                    published_at=published_at,
-                    raw_text=article.get("content"),
-                    description=description,
-                )
-                db.add(signal)
-                total_inserted += 1
-            except Exception as e:
-                print(f"[news_worker] Skipping article: {e}")
+            if not title or not url:
                 continue
 
-        db.flush()
+            ts = None
+            if published:
+                try:
+                    ts = datetime.fromisoformat(published.replace("Z", "+00:00"))
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                except ValueError:
+                    pass
+            if not ts:
+                # Deterministic fallback — avoids published_at instability across reruns
+                ts = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+            article_text = f"{title} {description}".strip()
+            matched_events = _find_matching_events(db, article_text)
+
+            if not matched_events:
+                skipped_no_match += 1
+                continue
+
+            source_category = _get_source_category(url)
+
+            for event in matched_events:
+                composite = f"{url}|{event.id}"
+                # Use stable "NewsAPI" label (not source_name) for deterministic ID
+                sig_id = make_signal_id(event.id, "NewsAPI", composite)
+
+                if db.query(Signal).filter(Signal.id == sig_id).first():
+                    continue
+
+                full_desc = f"{title}. {description}" if description else title
+
+                sig = Signal(
+                    id=sig_id,
+                    event_id=event.id,
+                    source=source_name,
+                    source_category=SourceCategory(source_category),
+                    article_url=url,
+                    published_at=ts,
+                    raw_text=truncate(article_text, 400),
+                    description=truncate(full_desc, 400),
+                    coordinates_mentioned=None,
+                )
+                db.add(sig)
+                inserted += 1
+
+        except Exception as exc:
+            print(f"[news_worker] Skipping article: {exc}")
+            continue
 
     db.commit()
-    print(f"[news_worker] Inserted {total_inserted} real news signals.")
+    print(
+        f"[news_worker] Done — {inserted} signals inserted, "
+        f"{skipped_no_match} articles skipped (no event match)."
+    )
 
 
-# Celery task wrapper
 def ingest_news_task():
-    """Celery-compatible task entry point."""
+    """Celery-compatible entry point."""
     from backend.database import SessionLocal
     db = SessionLocal()
     try:

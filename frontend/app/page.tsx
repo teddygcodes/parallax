@@ -2,6 +2,7 @@
 
 import dynamic from 'next/dynamic'
 import { useEffect, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { AnimatePresence, motion } from 'framer-motion'
 import type { ConflictEvent, EventType, SatellitePosition } from '@/types'
 import HoverCard from '../components/HoverCard'
@@ -12,6 +13,7 @@ import AmbientSound from '../components/AmbientSound'
 import SatelliteLayer from '../components/SatelliteLayer'
 import SatelliteHoverCard from '../components/SatelliteHoverCard'
 import type { GlobeHandle } from '../components/Globe'  // type only — not passed via ref
+import SignalFeed from '../components/SignalFeed'
 
 // Dynamic imports with ssr: false — must never run on server
 const GlobeComponent = dynamic(() => import('../components/Globe'), { ssr: false })
@@ -26,7 +28,20 @@ type HoveredSatelliteState = {
 } | null
 
 export default function Home() {
+  const router = useRouter()
   const [activeTab, setActiveTab] = useState<Tab>('GLOBE')
+
+  // Sync tab to/from URL so back-button from event pages returns to the correct tab
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const tab = params.get('tab')
+    if (tab === 'SIGNAL' || tab === 'GLOBE') setActiveTab(tab as Tab)
+  }, [])
+
+  function switchTab(tab: Tab) {
+    setActiveTab(tab)
+    window.history.replaceState({}, '', tab === 'GLOBE' ? '/' : '/?tab=SIGNAL')
+  }
 
   // Interaction state
   const [selectedEvent, setSelectedEvent] = useState<ConflictEvent | null>(null)
@@ -105,6 +120,17 @@ export default function Home() {
     setSelectedEvent(null)
   }
 
+  // Handle event click from the SIGNAL tab — navigate to the event detail page.
+  function handleEventFromFeed(event: {
+    event_id:         string
+    event_type:       string
+    event_lat:        number
+    event_lng:        number
+    newest_signal_at: string | null
+  }) {
+    router.push(`/event/${event.event_id}`)
+  }
+
   // Receive current events from Globe for LivingEarthMode camera drift
   function handleEventsUpdate(events: ConflictEvent[]) {
     setCurrentEvents(events)
@@ -175,10 +201,10 @@ export default function Home() {
           display: 'flex',
           gap: '36px',
         }}>
-          {(['GLOBE'] as Tab[]).map(tab => (
+          {(['GLOBE', 'SIGNAL'] as Tab[]).map(tab => (
             <button
               key={tab}
-              onClick={() => setActiveTab(tab)}
+              onClick={() => switchTab(tab)}
               style={{
                 fontFamily: 'IBM Plex Mono, monospace',
                 fontSize: '12px',
@@ -258,6 +284,19 @@ export default function Home() {
             </div>
           )}
 
+          {/* Click-outside backdrop — sits behind panel, closes it on globe click */}
+          {selectedEvent && (
+            <div
+              onClick={handlePanelClose}
+              style={{
+                position: 'absolute',
+                inset: 0,
+                zIndex: 199,
+                cursor: 'default',
+              }}
+            />
+          )}
+
           {/* NarrativePanel — slides in from right */}
           <AnimatePresence>
             {selectedEvent && (
@@ -285,26 +324,9 @@ export default function Home() {
         />
       )}
 
-      {/* SIGNAL tab — placeholder only in Phase 2. Full tab is Phase 3. */}
+      {/* SIGNAL tab — event discovery feed */}
       {!isLivingEarth && activeTab === 'SIGNAL' && (
-        <div style={{
-          position: 'absolute',
-          inset: 0,
-          background: '#0a0a0e',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 2,
-        }}>
-          <span style={{
-            fontFamily: 'IBM Plex Mono, monospace',
-            fontSize: '13px',
-            letterSpacing: '0.12em',
-            color: '#8a8a8a',
-          }}>
-            SIGNAL FEED INITIALIZING...
-          </span>
-        </div>
+        <SignalFeed onEventClick={handleEventFromFeed} />
       )}
 
       {/* Living Earth Mode orchestrator */}

@@ -21,22 +21,44 @@ def make_signal_id(event_id: str, source: str, composite_key: str) -> str:
 
 
 def is_violence_code(code: str) -> bool:
-    """Return True if GDELT EventCode is a 3-digit violence code in 180–209.
-    Two-digit family labels ('18', '19', '20') and 4-digit codes are NOT accepted.
+    """Return True if GDELT EventCode should be ingested.
+    Accepts:
+      152–154: troop/naval mobilization and military maneuvers (CAMEO 15x)
+      180–209: assault, fight, and mass violence codes
+    Rejects 2-digit family labels, 4-digit codes, non-numeric strings.
     """
     if not code or not code.isdigit() or len(code) != 3:
         return False
-    return 180 <= int(code) <= 209
+    n = int(code)
+    return (152 <= n <= 154) or (180 <= n <= 209)
 
 
 def normalize_event_type(gdelt_code: str) -> str:
-    """Map GDELT EventCode root to an EventType string value."""
+    """Map GDELT EventCode to an EventType string value.
+    152  → TROOP   (mobilize armed forces)
+    153  → NAVAL   (mobilize air and naval forces)
+    154  → TROOP   (military maneuvers/exercises)
+    192  → TROOP   (occupy territory)
+    194  → MISSILE (fight with artillery and tanks)
+    195  → DRONE   (employ aerial weapons)
+    196  → MISSILE (missile or rocket attack)
+    18x  → STRIKE  (assault/blockade/bombardment)
+    19x  → STRIKE  (fight/engagement — except 192/194/195/196 above)
+    20x  → STRIKE  (mass violence/atrocity codes)
+    """
+    exact = {
+        "152": "TROOP",
+        "153": "NAVAL",
+        "154": "TROOP",
+        "192": "TROOP",
+        "194": "MISSILE",
+        "195": "DRONE",
+        "196": "MISSILE",
+    }
+    if gdelt_code in exact:
+        return exact[gdelt_code]
     prefix = gdelt_code[:2] if len(gdelt_code) >= 2 else ""
-    return {
-        "18": "STRIKE",
-        "19": "STRIKE",
-        "20": "MISSILE",
-    }.get(prefix, "STRIKE")
+    return {"18": "STRIKE", "19": "STRIKE", "20": "STRIKE"}.get(prefix, "STRIKE")
 
 
 def parse_gdelt_date(sqldate: str) -> datetime:
