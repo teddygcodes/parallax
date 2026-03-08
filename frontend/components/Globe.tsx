@@ -55,6 +55,10 @@ function GlobeComponent({
   const jitterMapRef = useRef<Map<string, { dlat: number; dlng: number }>>(new Map())
   const satellitePositionsRef = useRef<SatellitePosition[]>(satellitePositions ?? [])
   const isLivingEarthRef = useRef<boolean>(isLivingEarth ?? false)
+  // Stable ref for onEventClick — avoids stale closure in the custom click handler
+  const onEventClickRef = useRef(onEventClick)
+  // Stored so cleanup can removeEventListener with the exact same function reference
+  const clickHandlerRef = useRef<((e: MouseEvent) => void) | null>(null)
   const [state, setState] = useState<GlobeState>('loading')
   const [allEvents, setAllEvents] = useState<ConflictEvent[]>([])
   const [showLoadingText, setShowLoadingText] = useState(false)
@@ -62,6 +66,7 @@ function GlobeComponent({
   // Keep refs in sync so renderToGlobe always has latest values without re-running init
   satellitePositionsRef.current = satellitePositions ?? []
   isLivingEarthRef.current = isLivingEarth ?? false
+  onEventClickRef.current = onEventClick
 
   // Filter events by current props
   function applyFilters(events: ConflictEvent[]): ConflictEvent[] {
@@ -163,13 +168,15 @@ function GlobeComponent({
         return 0.02  // STRIKE
       })
       .pointRadius((d: GlobePoint) => {
-        if (d._kind === 'satellite') return 0.28  // was 0.2
+        if (d._kind === 'satellite') return 0.28
         const evt = d as EventPoint
         if (evt.event_type === 'NAVAL')   return 0.5
         if (evt.event_type === 'TROOP')   return 0.3
-        if (evt.event_type === 'STRIKE')  return 2.5  // invisible — hitbox covers ring
-        if (evt.event_type === 'DRONE')   return 1.0
-        if (evt.event_type === 'MISSILE') return 0.8
+        // Hitbox must be >= ringMaxRadius so any click inside the ring registers.
+        // STRIKE ring = 3.0°, DRONE ring = 1.2°, MISSILE ring = 0.6°
+        if (evt.event_type === 'STRIKE')  return 4.0   // covers 3.0° ring + buffer
+        if (evt.event_type === 'DRONE')   return 2.0   // covers 1.2° ring + buffer
+        if (evt.event_type === 'MISSILE') return 1.2   // covers 0.6° ring + buffer
         return 1.5
       })
       .pointLabel(() => '')
@@ -336,11 +343,28 @@ function GlobeComponent({
       globe.onArcHover((arc: object | null) => {
         onEventHover?.(arc as ConflictEvent | null, mousePosRef.current.x, mousePosRef.current.y)
       })
-      globe.onPointClick((point: any) => {
-        if (!point) return
-        if (point._kind === 'satellite') return  // satellites are not clickable (open NarrativePanel)
-        onEventClick?.(point as ConflictEvent)
-      })
+      // globe.onPointClick is NOT used for events — fully-transparent points (rgba=0) are
+      // excluded from THREE.js raycasting regardless of pointRadius, so onPointClick never fires.
+      // Instead: listen for raw canvas clicks, convert to lat/lng via toGlobeCoords, then
+      // find the nearest event within a generous degree threshold.
+      clickHandlerRef.current = (e: MouseEvent) => {
+        if (!globeRef.current) return
+        const rect = containerRef.current!.getBoundingClientRect()
+        const coords = (globeRef.current as any).toGlobeCoords(
+          e.clientX - rect.left,
+          e.clientY - rect.top,
+        )
+        if (!coords) return  // click was off-globe
+        let closest: ConflictEvent | null = null
+        let minDist = Infinity
+        for (const evt of allEventsRef.current) {
+          const d = Math.sqrt((evt.lat - coords.lat) ** 2 + (evt.lng - coords.lng) ** 2)
+          if (d < minDist) { minDist = d; closest = evt }
+        }
+        // 4° threshold — comfortably covers the STRIKE ring radius (3°)
+        if (closest && minDist < 4.0) onEventClickRef.current?.(closest)
+      }
+      containerRef.current!.addEventListener('click', clickHandlerRef.current)
       globe.onArcClick((arc: object | null) => {
         if (arc) onEventClick?.(arc as ConflictEvent)
       })
@@ -378,6 +402,10 @@ function GlobeComponent({
     return () => {
       mounted = false
       if (intervalRef.current) clearInterval(intervalRef.current)
+      if (clickHandlerRef.current) {
+        containerRef.current?.removeEventListener('click', clickHandlerRef.current)
+        clickHandlerRef.current = null
+      }
       window.removeEventListener('resize', handleResize)
       window.removeEventListener('mousemove', handleMouseMove)
       // Dispose the WebGL context so React Strict Mode / HMR remounts get a clean container

@@ -61,6 +61,24 @@ CONFLICT_COUNTRIES = {
     "RS",  # Russia         (ISO: RU)
     "MX",  # Mexico         (same)
     "HA",  # Haiti          (ISO: HT)
+    "IR",  # Iran           (same)
+    "SA",  # Saudi Arabia   (same)
+    "AE",  # UAE            (same)
+    "QA",  # Qatar          (same)
+    "MU",  # Oman           (ISO: OM)
+    "KU",  # Kuwait         (ISO: KW)
+    "TU",  # Turkey         (ISO: TR)
+    "AJ",  # Azerbaijan     (ISO: AZ)
+    "AM",  # Armenia        (same)
+    "PA",  # Panama         (same — cartel violence)
+    "KN",  # Korea, North   (ISO: KP)
+    "CH",  # China          (ISO: CN) — South China Sea, Xinjiang, Taiwan Strait
+    "IN",  # India          (same) — Kashmir, Manipur
+    "RP",  # Philippines    (ISO: PH) — NPA, Abu Sayyaf
+    "VE",  # Venezuela      (same) — political violence, border tensions
+    "BA",  # Bahrain        (same) — Middle East spillover
+    "EC",  # Ecuador        (same) — cartel/gang violence
+    "RI",  # Serbia         (ISO: RS) — Kosovo tensions
 }
 
 # Human-readable labels for GDELT violence event codes (180–209 family)
