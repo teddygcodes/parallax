@@ -4,7 +4,9 @@ No API key required. Falls back gracefully on any network failure.
 """
 import csv
 import io
+import re
 import zipfile
+from datetime import datetime, timezone
 import requests
 
 from backend.models import Event, EventType, ConfidenceLevel, Signal, SourceCategory
@@ -14,6 +16,9 @@ from backend.workers.ingest_utils import (
     make_event_id, make_signal_id, is_violence_code,
     normalize_event_type, parse_gdelt_date, truncate,
 )
+
+# GDELT export filenames encode the 15-minute slot: 20260308073000.export.CSV.zip
+_FILE_TS_RE = re.compile(r'/(\d{14})\.export\.CSV\.zip')
 
 GDELT_LASTUPDATE_URL = "http://data.gdeltproject.org/gdeltv2/lastupdate.txt"
 # GDELT lastupdate endpoint uses HTTP here; preserve this unless verified otherwise.
@@ -135,10 +140,12 @@ def _build_gdelt_description(code: str, geo_name: str, url: str | None) -> str:
     return truncate(base, 400)
 
 
-def _get_export_url() -> str | None:
-    """Return the .export.CSV.zip URL from GDELT lastupdate.txt, or None.
-    Validates: line contains 'export.CSV.zip', has >= 3 space-separated parts,
-    and the URL part starts with 'http'. Returns None otherwise.
+def _get_export_url() -> tuple[str, datetime] | None:
+    """Return (url, file_ts) from GDELT lastupdate.txt, or None.
+
+    file_ts is parsed from the filename timestamp (YYYYMMDDHHMMSS) — gives 15-minute
+    precision for signal published_at, instead of the day-level SQLDATE (YYYYMMDD)
+    which always resolves to midnight UTC and makes every signal appear hours old.
     """
     resp = requests.get(GDELT_LASTUPDATE_URL, timeout=15, headers=HEADERS)
     resp.raise_for_status()
@@ -146,7 +153,17 @@ def _get_export_url() -> str | None:
         if "export.CSV.zip" in line:
             parts = line.strip().split()
             if len(parts) >= 3 and parts[2].startswith("http"):
-                return parts[2]
+                url = parts[2]
+                now = datetime.now(timezone.utc)
+                m = _FILE_TS_RE.search(url)
+                if m:
+                    raw_ts = datetime.strptime(m.group(1), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+                    # GDELT publishes files slightly before the slot time — cap at now()
+                    # so signals never appear in the future.
+                    file_ts = min(raw_ts, now)
+                else:
+                    file_ts = now
+                return url, file_ts
     return None
 
 
@@ -172,11 +189,16 @@ def ingest_gdelt(db) -> None:
     # same day from GDELT will share one ID and be deduplicated.
     # parse_gdelt_date() may raise on malformed SQLDATE — treated as a row-level
     # skip inside the loop, not a worker failure.
+    #
+    # file_ts: 15-minute-precise timestamp from the export filename (YYYYMMDDHHMMSS).
+    # Used as signal.published_at so signals aren't pinned to midnight UTC.
+    # Event IDs still use the day-level ts for stable dedup across 15-min files.
     try:
-        export_url = _get_export_url()
-        if not export_url:
+        result = _get_export_url()
+        if not result:
             print("[gdelt_worker] No valid export URL found — skipping.")
             return
+        export_url, file_ts = result
         row_iter = _iter_rows(export_url)
     except Exception as exc:
         print(f"[gdelt_worker] Fetch failed: {exc} — skipping.")
@@ -253,7 +275,7 @@ def ingest_gdelt(db) -> None:
                     source="GDELT",
                     source_category=SourceCategory.WESTERN,
                     article_url=url,
-                    published_at=ts,
+                    published_at=file_ts,  # 15-min file slot, not day-level SQLDATE midnight
                     raw_text=None,
                     description=_build_gdelt_description(code, geo_name, url),
                     coordinates_mentioned=f"{lat:.3f},{lng:.3f}",
