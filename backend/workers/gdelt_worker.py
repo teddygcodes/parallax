@@ -81,8 +81,12 @@ CONFLICT_COUNTRIES = {
     "RI",  # Serbia         (ISO: RS) — Kosovo tensions
 }
 
-# Human-readable labels for GDELT violence event codes (180–209 family)
+# Human-readable labels for GDELT event codes ingested by this worker.
+# 15x = military posture / mobilization; 180-209 = violence / assault family.
 GDELT_CODE_LABELS = {
+    "152": "Armed forces mobilized",
+    "153": "Air and naval forces mobilized",
+    "154": "Military maneuvers or exercises reported",
     "180": "Military force used",
     "181": "Blockade or movement restriction imposed",
     "182": "Territory occupied",
