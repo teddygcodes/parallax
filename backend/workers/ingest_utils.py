@@ -38,15 +38,21 @@ def normalize_event_type(gdelt_code: str) -> str:
     152  → TROOP   (mobilize armed forces)
     153  → NAVAL   (mobilize air and naval forces)
     154  → TROOP   (military maneuvers/exercises)
+    192  → TROOP   (occupy territory)
+    194  → MISSILE (fight with artillery and tanks)
+    195  → DRONE   (employ aerial weapons)
     196  → MISSILE (missile or rocket attack)
     18x  → STRIKE  (assault/blockade/bombardment)
-    19x  → STRIKE  (fight/engagement — except 196 above)
-    20x  → STRIKE  (mass violence/atrocity codes — NOT missiles)
+    19x  → STRIKE  (fight/engagement — except 192/194/195/196 above)
+    20x  → STRIKE  (mass violence/atrocity codes)
     """
     exact = {
         "152": "TROOP",
         "153": "NAVAL",
         "154": "TROOP",
+        "192": "TROOP",
+        "194": "MISSILE",
+        "195": "DRONE",
         "196": "MISSILE",
     }
     if gdelt_code in exact:

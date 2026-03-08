@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import Event, Signal, SourceCategory, EventType, ConfidenceLevel
@@ -55,10 +56,20 @@ def seed_mock_events(db: Session):
 
 
 @router.get("/events")
-def list_events(limit: int = 20, offset: int = 0, db: Session = Depends(get_db)):
+def list_events(limit: int = 20, offset: int = 0, min_signals: int = 2, db: Session = Depends(get_db)):
     seed_mock_events(db)
-    total = db.query(Event).count()
-    events = db.query(Event).offset(offset).limit(limit).all()
+    sig_count = (
+        db.query(Signal.event_id, func.count(Signal.id).label("cnt"))
+        .group_by(Signal.event_id)
+        .subquery()
+    )
+    base_q = (
+        db.query(Event)
+        .join(sig_count, Event.id == sig_count.c.event_id)
+        .filter(sig_count.c.cnt >= min_signals)
+    )
+    total = base_q.count()
+    events = base_q.offset(offset).limit(limit).all()
     return {
         "total": total,
         "limit": limit,
@@ -220,6 +231,243 @@ def get_recent_signals_grouped(limit: int = 20, db: Session = Depends(get_db)):
         result.append(g)
 
     return result
+
+
+@router.get("/events/recent-summaries")
+def get_recent_event_summaries(limit: int = 20, db: Session = Depends(get_db)):
+    """Return recent events as discovery cards for the SIGNAL tab.
+    Uses stored brief_text for ai_summary — no live AI calls per card.
+    Excludes GDELT signals. Groups by event_id from recent signal activity.
+    """
+    PERSPECTIVE_CATS = ["WESTERN", "RUSSIAN", "MIDDLE_EAST", "OSINT"]
+    RAW_LIMIT = 300
+    limit = max(1, min(limit, 50))  # clamp — prevent runaway queries
+
+    rows = (
+        db.query(Signal, Event)
+        .join(Event, Signal.event_id == Event.id)
+        .filter(Signal.source != "GDELT")
+        .order_by(Signal.published_at.desc())
+        .limit(RAW_LIMIT)
+        .all()
+    )
+
+    # Group by event_id — collect signals and track newest timestamp per group
+    groups: dict = {}
+    for sig, evt in rows:
+        eid = evt.id
+        if eid not in groups:
+            groups[eid] = {
+                "_evt":       evt,
+                "_signals":   [],
+                "_newest_ts": evt.first_detection_time,
+            }
+        groups[eid]["_signals"].append(sig)
+        ts = sig.published_at
+        if ts and (groups[eid]["_newest_ts"] is None or ts > groups[eid]["_newest_ts"]):
+            groups[eid]["_newest_ts"] = ts
+
+    # If two groups share identical newest_signal_at, preserve their existing iteration
+    # order rather than adding an arbitrary secondary sort key. This avoids card-order
+    # jitter between refreshes.
+    ordered = sorted(
+        groups.values(),
+        key=lambda g: g["_newest_ts"] or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )[:limit]
+
+    result = []
+    for g in ordered:
+        evt    = g["_evt"]
+        sigs   = g["_signals"]
+        newest = g["_newest_ts"]
+
+        # ai_summary: use stored brief_text if available; deterministic fallback if not.
+        # Never call Anthropic API here — discovery cards are built from stored data only.
+        if evt.brief_text:
+            ai_summary = evt.brief_text
+        else:
+            parts = [s.description.strip() for s in
+                     sorted(sigs, key=lambda x: x.published_at, reverse=True)
+                     if s.description][:2]
+            if parts:
+                raw = " ".join(parts)
+                if len(raw) > 300:
+                    cut = raw.rfind(" ", 0, 300)
+                    raw = (raw[:cut] if cut > 0 else raw[:300]).rstrip() + "..."
+                ai_summary = raw
+                # Fallback should stay concise — target feel of brief_text (short paragraph),
+                # not a raw description blob.
+            else:
+                ai_summary = "No summary available."
+
+        # headline_hint: best-effort subtitle from newest non-empty description
+        headline_hint = "No summary available"
+        for s in sorted(sigs, key=lambda x: x.published_at, reverse=True):
+            if s.description:
+                snippet = s.description.strip()
+                if len(snippet) > 40:
+                    cut = snippet.rfind(" ", 0, 40)
+                    snippet = (snippet[:cut] if cut > 0 else snippet[:40]).rstrip() + "..."
+                headline_hint = snippet
+                break
+
+        # Coverage counts per perspective category
+        coverage: dict = {cat: 0 for cat in PERSPECTIVE_CATS}
+        for s in sigs:
+            cat = s.source_category.value
+            if cat in coverage:
+                coverage[cat] += 1
+
+        result.append({
+            "event_id":             evt.id,
+            "event_type":           evt.event_type.value,
+            "event_lat":            evt.lat,
+            "event_lng":            evt.lng,
+            "first_detection_time": evt.first_detection_time.isoformat() if evt.first_detection_time else None,
+            "newest_signal_at":     newest.isoformat() if newest else None,
+            "headline_hint":        headline_hint,
+            "ai_summary":           ai_summary,
+            # signal_count = non-GDELT signal count within the bounded RAW_LIMIT window,
+            # NOT the event's lifetime total signal count. Correct scope for discovery.
+            # detail endpoint uses len(non_gdelt_sigs) which is the full event lifetime count.
+            "signal_count":         len(sigs),
+            # coverage_counts excludes GDELT and LOCAL; only WESTERN/RUSSIAN/MIDDLE_EAST/OSINT
+            "coverage_counts":      coverage,
+        })
+
+    return result
+
+
+@router.get("/events/{event_id}/detail")
+def get_event_detail(event_id: str, db: Session = Depends(get_db)):
+    """Return full event detail for the investigation page.
+    Combines stored brief_text, structured analysis (get_analysis), and
+    per-category signal buckets. Photos and videos are empty in v1.
+    GDELT excluded from analysis input, perspective board, signal_count,
+    and newest_signal_at. signal_count = non-GDELT signals only.
+    """
+    event = db.query(Event).filter(Event.id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail=f"Event {event_id} not found")
+
+    PERSPECTIVE_CATS = ["WESTERN", "RUSSIAN", "MIDDLE_EAST", "OSINT"]
+
+    try:
+        event_signals = list(event.signals)
+    except Exception:
+        event_signals = db.query(Signal).filter(Signal.event_id == event_id).all()
+
+    non_gdelt_sigs = [s for s in event_signals if s.source != "GDELT"]
+
+    signals_data = [
+        {
+            "source":          s.source,
+            "source_category": s.source_category.value,
+            "description":     s.description or "",
+        }
+        for s in non_gdelt_sigs
+    ]
+
+    # Guard: if all signals are GDELT (or none exist), skip live analysis and
+    # return blank defaults — get_analysis() may not handle empty input gracefully.
+    if signals_data:
+        analysis = get_analysis(event_id, signals_data)
+    else:
+        analysis = {
+            "what_is_confirmed":              "",
+            "what_is_disputed":               "",
+            "where_information_goes_dark":    "",
+            "core_disagreement":              "",
+            "divergence_score":               0.0,
+            "coordinated_messaging_suspected": False,
+        }
+
+    # AI summary: prefer stored brief_text; word-boundary-clamped fallback if absent
+    if event.brief_text:
+        summary = event.brief_text
+    else:
+        parts = [s["description"] for s in signals_data if s["description"]][:2]
+        if parts:
+            raw = " ".join(parts)
+            if len(raw) > 300:
+                cut = raw.rfind(" ", 0, 300)
+                raw = (raw[:cut] if cut > 0 else raw[:300]).rstrip() + "..."
+            summary = raw
+        else:
+            summary = "No summary available."
+
+    # headline_hint: newest non-empty description snippet (from non-GDELT signals)
+    headline_hint = "No summary available"
+    sorted_sigs = sorted(non_gdelt_sigs, key=lambda x: x.published_at, reverse=True)
+    for s in sorted_sigs:
+        if s.description:
+            snippet = s.description.strip()
+            if len(snippet) > 40:
+                cut = snippet.rfind(" ", 0, 40)
+                snippet = (snippet[:cut] if cut > 0 else snippet[:40]).rstrip() + "..."
+            headline_hint = snippet
+            break
+
+    # newest_ts and signal_count based on non-GDELT signals for consistency with
+    # what the detail page actually displays.
+    newest_ts = max(
+        (s.published_at for s in non_gdelt_sigs if s.published_at),
+        default=event.first_detection_time,
+    )
+
+    # Perspective board: per-category signal buckets, max 5 per category.
+    # Always initialise all four keys even when lists will be empty —
+    # frontend depends on stable key presence for fixed-grid rendering.
+    by_cat: dict = {cat: [] for cat in PERSPECTIVE_CATS}
+    seen_ids: set = set()
+    for s in sorted(non_gdelt_sigs, key=lambda x: x.published_at, reverse=True):
+        if s.id in seen_ids:
+            continue
+        cat = s.source_category.value
+        if cat in by_cat and len(by_cat[cat]) < 5:
+            by_cat[cat].append({
+                "id":              s.id,
+                "source":          s.source,
+                "source_category": cat,
+                "article_url":     s.article_url,
+                "published_at":    s.published_at.isoformat() if s.published_at else None,
+                "description":     s.description,
+            })
+            seen_ids.add(s.id)
+
+    return {
+        "event": {
+            "event_id":             event.id,
+            "event_type":           event.event_type.value,
+            "event_lat":            event.lat,
+            "event_lng":            event.lng,
+            "first_detection_time": event.first_detection_time.isoformat() if event.first_detection_time else None,
+            "newest_signal_at":     newest_ts.isoformat() if newest_ts else None,
+            "headline_hint":        headline_hint,
+            # signal_count reflects non-GDELT signals only — matches what the
+            # investigation page actually shows in the perspective board.
+            "signal_count":         len(non_gdelt_sigs),
+        },
+        "ai_analysis": {
+            "summary":                         summary,
+            # Key names mirror what get_analysis() already returns — do not rename here.
+            "what_is_confirmed":               analysis.get("what_is_confirmed", ""),
+            "what_is_disputed":                analysis.get("what_is_disputed", ""),
+            "where_information_goes_dark":     analysis.get("where_information_goes_dark", ""),
+            "core_disagreement":               analysis.get("core_disagreement", ""),
+            "divergence_score":                analysis.get("divergence_score", 0.0),
+            "coordinated_messaging_suspected": analysis.get("coordinated_messaging_suspected", False),
+            # perspective_notes and evidence_gaps reserved for v2
+            "perspective_notes": None,
+            "evidence_gaps":     [],
+        },
+        # signals_by_category must always contain all four keys, even when all arrays are empty.
+        "signals_by_category": by_cat,
+        # photos and videos must always be present as arrays — never omitted, never null.
+        "photos": [],
+        "videos": [],
+    }
 
 
 @router.get("/events/{event_id}/analysis")

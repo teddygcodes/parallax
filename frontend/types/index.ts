@@ -60,6 +60,58 @@ export interface SignalEventGroup {
   }
 }
 
+// SIGNAL v3 — event discovery card (top-level feed)
+export interface EventSummaryCard {
+  event_id: string
+  event_type: string
+  event_lat: number
+  event_lng: number
+  first_detection_time: string | null
+  newest_signal_at: string | null
+  headline_hint: string
+  ai_summary: string
+  signal_count: number
+  coverage_counts: {
+    WESTERN:     number
+    RUSSIAN:     number
+    MIDDLE_EAST: number
+    OSINT:       number
+  }
+}
+
+// SIGNAL v3 — event detail investigation page payload
+export interface EventDetailPayload {
+  event: {
+    event_id: string
+    event_type: string
+    event_lat: number
+    event_lng: number
+    first_detection_time: string | null
+    newest_signal_at: string | null
+    headline_hint: string
+    signal_count: number
+  }
+  ai_analysis: {
+    summary: string
+    what_is_confirmed: string
+    what_is_disputed: string
+    where_information_goes_dark: string
+    core_disagreement: string
+    divergence_score: number
+    coordinated_messaging_suspected: boolean
+    perspective_notes: null
+    evidence_gaps: string[]
+  }
+  signals_by_category: {
+    WESTERN:     RecentSignal[]
+    RUSSIAN:     RecentSignal[]
+    MIDDLE_EAST: RecentSignal[]
+    OSINT:       RecentSignal[]
+  }
+  photos: unknown[]
+  videos: unknown[]
+}
+
 export interface Analysis {
   what_is_confirmed: string
   what_is_disputed: string

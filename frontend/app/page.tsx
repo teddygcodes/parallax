@@ -2,6 +2,7 @@
 
 import dynamic from 'next/dynamic'
 import { useEffect, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { AnimatePresence, motion } from 'framer-motion'
 import type { ConflictEvent, EventType, SatellitePosition } from '@/types'
 import HoverCard from '../components/HoverCard'
@@ -27,6 +28,7 @@ type HoveredSatelliteState = {
 } | null
 
 export default function Home() {
+  const router = useRouter()
   const [activeTab, setActiveTab] = useState<Tab>('GLOBE')
 
   // Interaction state
@@ -106,25 +108,15 @@ export default function Home() {
     setSelectedEvent(null)
   }
 
-  // Handle signal click from the SIGNAL tab — reconstruct a minimal ConflictEvent,
-  // switch to GLOBE, and open the NarrativePanel for that event.
-  function handleSignalFromFeed(signal: {
-    event_id:    string
-    event_type:  string
-    event_lat:   number
-    event_lng:   number
-    published_at: string | null
+  // Handle event click from the SIGNAL tab — navigate to the event detail page.
+  function handleEventFromFeed(event: {
+    event_id:         string
+    event_type:       string
+    event_lat:        number
+    event_lng:        number
+    newest_signal_at: string | null
   }) {
-    setSelectedEvent({
-      id:                   signal.event_id,
-      lat:                  signal.event_lat,
-      lng:                  signal.event_lng,
-      event_type:           signal.event_type as EventType,
-      confidence:           'REPORTED',
-      first_detection_time: signal.published_at ?? '',
-      signal_count:         1,
-    })
-    setActiveTab('GLOBE')
+    router.push(`/event/${event.event_id}`)
   }
 
   // Receive current events from Globe for LivingEarthMode camera drift
@@ -280,6 +272,19 @@ export default function Home() {
             </div>
           )}
 
+          {/* Click-outside backdrop — sits behind panel, closes it on globe click */}
+          {selectedEvent && (
+            <div
+              onClick={handlePanelClose}
+              style={{
+                position: 'absolute',
+                inset: 0,
+                zIndex: 199,
+                cursor: 'default',
+              }}
+            />
+          )}
+
           {/* NarrativePanel — slides in from right */}
           <AnimatePresence>
             {selectedEvent && (
@@ -307,9 +312,9 @@ export default function Home() {
         />
       )}
 
-      {/* SIGNAL tab — live perspectival feed */}
+      {/* SIGNAL tab — event discovery feed */}
       {!isLivingEarth && activeTab === 'SIGNAL' && (
-        <SignalFeed onSignalClick={handleSignalFromFeed} />
+        <SignalFeed onEventClick={handleEventFromFeed} />
       )}
 
       {/* Living Earth Mode orchestrator */}

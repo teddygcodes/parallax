@@ -1,15 +1,15 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import type { RecentSignal, SignalEventGroup } from '@/types'
+import type { EventSummaryCard } from '@/types'
 
 interface SignalFeedProps {
-  onSignalClick: (payload: {
-    event_id: string
-    event_type: string
-    event_lat: number
-    event_lng: number
-    published_at: string | null
+  onEventClick: (payload: {
+    event_id:         string
+    event_type:       string
+    event_lat:        number
+    event_lng:        number
+    newest_signal_at: string | null
   }) => void
 }
 
@@ -50,17 +50,17 @@ function relativeTime(isoStr: string | null): string {
   return `${Math.floor(hrs / 24)}d ago`
 }
 
-export default function SignalFeed({ onSignalClick }: SignalFeedProps) {
-  const [groups, setGroups]           = useState<SignalEventGroup[]>([])
+export default function SignalFeed({ onEventClick }: SignalFeedProps) {
+  const [cards, setCards]             = useState<EventSummaryCard[]>([])
   const [loading, setLoading]         = useState(true)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
 
-  const fetchGroups = useCallback(async () => {
+  const fetchCards = useCallback(async () => {
     try {
-      const res = await fetch('/api/signals/recent-grouped?limit=20')
+      const res = await fetch('/api/events/recent-summaries?limit=20')
       if (!res.ok) return
-      const data: SignalEventGroup[] = await res.json()
-      setGroups(data)
+      const data: EventSummaryCard[] = await res.json()
+      setCards(data)
       setLastRefresh(new Date())
     } catch {
       // silent fail — stale data is acceptable
@@ -70,10 +70,10 @@ export default function SignalFeed({ onSignalClick }: SignalFeedProps) {
   }, [])
 
   useEffect(() => {
-    fetchGroups()
-    const interval = setInterval(fetchGroups, 30_000)
+    fetchCards()
+    const interval = setInterval(fetchCards, 30_000)
     return () => clearInterval(interval)
-  }, [fetchGroups])
+  }, [fetchCards])
 
   return (
     <div style={{
@@ -84,12 +84,12 @@ export default function SignalFeed({ onSignalClick }: SignalFeedProps) {
       display:       'flex',
       flexDirection: 'column',
     }}>
-      {/* Top bar */}
+      {/* Top bar — padding-top clears the tab nav (zIndex 300, ~top 24px) */}
       <div style={{
         display:        'flex',
         alignItems:     'center',
         justifyContent: 'space-between',
-        padding:        '18px 32px 14px',
+        padding:        '68px 32px 14px',
         borderBottom:   '1px solid rgba(255,255,255,0.06)',
         flexShrink:     0,
       }}>
@@ -133,16 +133,16 @@ export default function SignalFeed({ onSignalClick }: SignalFeedProps) {
         )}
       </div>
 
-      {/* Scrollable event rows */}
+      {/* Scrollable event cards */}
       <div style={{
-        flex:          1,
-        overflowY:     'auto',
+        flex:           1,
+        overflowY:      'auto',
         scrollbarWidth: 'thin',
         scrollbarColor: 'rgba(255,255,255,0.08) transparent',
       }}>
-        {loading && <SkeletonRows />}
+        {loading && <SkeletonCards />}
 
-        {!loading && groups.length === 0 && (
+        {!loading && cards.length === 0 && (
           <div style={{
             display:        'flex',
             alignItems:     'center',
@@ -153,16 +153,16 @@ export default function SignalFeed({ onSignalClick }: SignalFeedProps) {
             color:          '#2a2a2a',
             letterSpacing:  '0.1em',
           }}>
-            NO SIGNALS
+            NO EVENTS
           </div>
         )}
 
-        {!loading && groups.map((group, idx) => (
-          <EventRow
-            key={group.event_id}
-            group={group}
-            onSignalClick={onSignalClick}
-            isLast={idx === groups.length - 1}
+        {!loading && cards.map((card, idx) => (
+          <EventCard
+            key={card.event_id}
+            card={card}
+            onEventClick={onEventClick}
+            isLast={idx === cards.length - 1}
           />
         ))}
       </div>
@@ -181,30 +181,45 @@ export default function SignalFeed({ onSignalClick }: SignalFeedProps) {
   )
 }
 
-// ── Event row ─────────────────────────────────────────────────────────────────
+// ── Event card ─────────────────────────────────────────────────────────────────
 
-function EventRow({
-  group,
-  onSignalClick,
+function EventCard({
+  card,
+  onEventClick,
   isLast,
 }: {
-  group:         SignalEventGroup
-  onSignalClick: SignalFeedProps['onSignalClick']
-  isLast:        boolean
+  card:         EventSummaryCard
+  onEventClick: SignalFeedProps['onEventClick']
+  isLast:       boolean
 }) {
-  const typeColor = EVENT_TYPE_COLORS[group.event_type] ?? '#8a8a8a'
+  const [hovered, setHovered] = useState(false)
+  const typeColor = EVENT_TYPE_COLORS[card.event_type] ?? '#8a8a8a'
 
   return (
-    <div style={{
-      padding:      '20px 24px',
-      borderBottom: isLast ? 'none' : '1px solid rgba(255,255,255,0.05)',
-    }}>
-      {/* Row header */}
+    <div
+      onClick={() => onEventClick({
+        event_id:         card.event_id,
+        event_type:       card.event_type,
+        event_lat:        card.event_lat,
+        event_lng:        card.event_lng,
+        newest_signal_at: card.newest_signal_at,
+      })}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        padding:      '20px 24px',
+        borderBottom: isLast ? 'none' : '1px solid rgba(255,255,255,0.05)',
+        background:   hovered ? 'rgba(255,255,255,0.03)' : 'transparent',
+        cursor:       'pointer',
+        transition:   'background 200ms ease',
+      }}
+    >
+      {/* Header row */}
       <div style={{
-        display:       'flex',
-        alignItems:    'center',
-        gap:           '10px',
-        marginBottom:  '14px',
+        display:      'flex',
+        alignItems:   'center',
+        gap:          '10px',
+        marginBottom: '12px',
       }}>
         {/* Event type badge */}
         <span style={{
@@ -217,10 +232,10 @@ function EventRow({
           padding:       '2px 5px',
           flexShrink:    0,
         }}>
-          {group.event_type}
+          {card.event_type}
         </span>
 
-        {/* Headline hint — muted subtitle, not a canonical label */}
+        {/* headline_hint — muted subtitle */}
         <span style={{
           fontFamily:   'Instrument Serif, serif',
           fontSize:     '13px',
@@ -230,10 +245,10 @@ function EventRow({
           textOverflow: 'ellipsis',
           whiteSpace:   'nowrap',
         }}>
-          {group.headline_hint}
+          {card.headline_hint}
         </span>
 
-        {/* Relative time of newest signal */}
+        {/* Relative time */}
         <span style={{
           fontFamily:    'IBM Plex Mono, monospace',
           fontSize:      '10px',
@@ -241,63 +256,39 @@ function EventRow({
           flexShrink:    0,
           letterSpacing: '0.06em',
         }}>
-          · {relativeTime(group.newest_signal_at)}
+          · {relativeTime(card.newest_signal_at)}
         </span>
-
-        {/* Signal count — very muted */}
-        {group.signal_count > 0 && (
-          <span style={{
-            fontFamily: 'IBM Plex Mono, monospace',
-            fontSize:   '10px',
-            color:      '#3a3a3a',
-            flexShrink: 0,
-          }}>
-            {group.signal_count}
-          </span>
-        )}
       </div>
 
-      {/* 4-column perspective grid */}
+      {/* AI summary */}
       <div style={{
-        display:             'grid',
-        gridTemplateColumns: 'repeat(4, 1fr)',
-        gap:                 '8px',
+        fontFamily:      'Instrument Serif, serif',
+        fontSize:        '14px',
+        lineHeight:      '1.6',
+        color:           '#b0aea8',
+        display:         '-webkit-box',
+        WebkitLineClamp: 4,
+        WebkitBoxOrient: 'vertical',
+        overflow:        'hidden',
+        marginBottom:    '14px',
       }}>
+        {card.ai_summary}
+      </div>
+
+      {/* Coverage strip */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
         {CATEGORIES.map(cat => {
-          const color   = CATEGORY_COLORS[cat]
-          const label   = CATEGORY_LABELS[cat]
-          const signals = group.signals_by_category[cat] ?? []
-
+          const count = card.coverage_counts[cat] ?? 0
+          const color = count > 0 ? CATEGORY_COLORS[cat] : '#3a3a3a'
           return (
-            <div key={cat} style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-              {/* Column header */}
-              <div style={{
-                fontFamily:    'IBM Plex Mono, monospace',
-                fontSize:      '9px',
-                letterSpacing: '0.14em',
-                color,
-                paddingBottom: '6px',
-                borderBottom:  `1px solid ${color}18`,
-                marginBottom:  '2px',
-              }}>
-                {label}
-              </div>
-
-              {/* Cards or empty state */}
-              {signals.length === 0 ? (
-                <EmptyCell />
-              ) : (
-                signals.map(sig => (
-                  <PerspectiveCard
-                    key={sig.id}
-                    signal={sig}
-                    accentColor={color}
-                    eventGroup={group}
-                    onSignalClick={onSignalClick}
-                  />
-                ))
-              )}
-            </div>
+            <span key={cat} style={{
+              fontFamily:    'IBM Plex Mono, monospace',
+              fontSize:      '9px',
+              letterSpacing: '0.1em',
+              color,
+            }}>
+              {CATEGORY_LABELS[cat]} {count}
+            </span>
           )
         })}
       </div>
@@ -305,158 +296,37 @@ function EventRow({
   )
 }
 
-// ── Signal card ───────────────────────────────────────────────────────────────
+// ── Loading skeleton ───────────────────────────────────────────────────────────
 
-function PerspectiveCard({
-  signal,
-  accentColor,
-  eventGroup,
-  onSignalClick,
-}: {
-  signal:        RecentSignal
-  accentColor:   string
-  eventGroup:    SignalEventGroup
-  onSignalClick: SignalFeedProps['onSignalClick']
-}) {
-  const [hovered, setHovered] = useState(false)
-
-  return (
-    <div
-      onClick={() => onSignalClick({
-        event_id:    eventGroup.event_id,
-        event_type:  eventGroup.event_type,
-        event_lat:   eventGroup.event_lat,
-        event_lng:   eventGroup.event_lng,
-        published_at: signal.published_at,
-      })}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{
-        padding:      '8px 8px 6px',
-        borderRadius: '2px',
-        background:   hovered ? 'rgba(255,255,255,0.04)' : 'rgba(255,255,255,0.015)',
-        border:       '1px solid rgba(255,255,255,0.05)',
-        cursor:       'pointer',
-        transition:   'background 200ms ease',
-      }}
-    >
-      {/* Source name */}
-      <div style={{
-        fontFamily:    'IBM Plex Mono, monospace',
-        fontSize:      '9px',
-        letterSpacing: '0.1em',
-        fontWeight:    600,
-        color:         accentColor,
-        marginBottom:  '4px',
-        textTransform: 'uppercase',
-        overflow:      'hidden',
-        textOverflow:  'ellipsis',
-        whiteSpace:    'nowrap',
-      }}>
-        {signal.source}
-      </div>
-
-      {/* Description — 3-line clamp */}
-      <div style={{
-        fontFamily:      'Instrument Serif, serif',
-        fontSize:        '12px',
-        lineHeight:      '1.45',
-        color:           '#b0aea8',
-        display:         '-webkit-box',
-        WebkitLineClamp: 3,
-        WebkitBoxOrient: 'vertical',
-        overflow:        'hidden',
-        marginBottom:    '6px',
-      }}>
-        {signal.description || '—'}
-      </div>
-
-      {/* Bottom row: timestamp · ↗ link (no event type badge — already in row header) */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-        <span style={{
-          fontFamily: 'IBM Plex Mono, monospace',
-          fontSize:   '9px',
-          color:      '#8a8a8a',
-          flex:       1,
-        }}>
-          {relativeTime(signal.published_at)}
-        </span>
-
-        {signal.article_url && (
-          <a
-            href={signal.article_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={e => e.stopPropagation()}
-            style={{
-              color:          '#64b5f6',
-              fontSize:       '10px',
-              textDecoration: 'none',
-              flexShrink:     0,
-              lineHeight:     1,
-              opacity:        hovered ? 0.9 : 0.35,
-              transition:     'opacity 200ms ease',
-            }}
-            title="Open source"
-          >
-            ↗
-          </a>
-        )}
-      </div>
-    </div>
-  )
-}
-
-// ── Empty cell ────────────────────────────────────────────────────────────────
-
-function EmptyCell() {
-  return (
-    <div style={{
-      color:      '#2a2a2a',
-      fontFamily: 'IBM Plex Mono, monospace',
-      fontSize:   '12px',
-      textAlign:  'center',
-      paddingTop: '10px',
-    }}>
-      —
-    </div>
-  )
-}
-
-// ── Loading skeleton ──────────────────────────────────────────────────────────
-
-function SkeletonRows() {
+function SkeletonCards() {
   return (
     <>
-      {[0, 1, 2].map(i => (
+      {[0, 1, 2, 3].map(i => (
         <div
           key={i}
           style={{
             padding:        '20px 24px',
             borderBottom:   '1px solid rgba(255,255,255,0.05)',
-            animation:      `sigfeed-shimmer 1.8s ease-in-out infinite`,
+            animation:      'sigfeed-shimmer 1.8s ease-in-out infinite',
             animationDelay: `${i * 0.2}s`,
           }}
         >
-          {/* Skeleton row header */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
+          {/* Skeleton header */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
             <div style={{ width: '48px', height: '16px', background: 'rgba(255,255,255,0.08)', borderRadius: '2px' }} />
-            <div style={{ width: '200px', height: '14px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px' }} />
-            <div style={{ width: '50px', height: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: '2px', marginLeft: 'auto' }} />
+            <div style={{ flex: 1, height: '14px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px' }} />
+            <div style={{ width: '50px', height: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: '2px' }} />
           </div>
-
-          {/* Skeleton 4-column grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '8px' }}>
+          {/* Skeleton AI summary block */}
+          <div style={{ marginBottom: '14px' }}>
+            <div style={{ height: '12px', width: '95%', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', marginBottom: '6px' }} />
+            <div style={{ height: '12px', width: '85%', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', marginBottom: '6px' }} />
+            <div style={{ height: '12px', width: '70%', background: 'rgba(255,255,255,0.04)', borderRadius: '2px' }} />
+          </div>
+          {/* Skeleton coverage strip */}
+          <div style={{ display: 'flex', gap: '16px' }}>
             {[0, 1, 2, 3].map(j => (
-              <div key={j} style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                <div style={{ height: '8px', width: '60%', background: 'rgba(255,255,255,0.06)', borderRadius: '2px', marginBottom: '8px' }} />
-                <div style={{ padding: '8px', border: '1px solid rgba(255,255,255,0.04)', borderRadius: '2px' }}>
-                  <div style={{ height: '7px', width: '45%', background: 'rgba(255,255,255,0.08)', borderRadius: '2px', marginBottom: '6px' }} />
-                  <div style={{ height: '7px', width: '90%', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', marginBottom: '3px' }} />
-                  <div style={{ height: '7px', width: '75%', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', marginBottom: '3px' }} />
-                  <div style={{ height: '7px', width: '55%', background: 'rgba(255,255,255,0.04)', borderRadius: '2px' }} />
-                </div>
-              </div>
+              <div key={j} style={{ width: '56px', height: '10px', background: 'rgba(255,255,255,0.04)', borderRadius: '2px' }} />
             ))}
           </div>
         </div>
