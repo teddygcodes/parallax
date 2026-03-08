@@ -42,6 +42,24 @@ export interface RecentSignal {
   description: string | null
 }
 
+// Used by SIGNAL tab v2 — event-grouped perspective board
+export interface SignalEventGroup {
+  event_id: string
+  event_type: string           // backend returns string enum value; cast to EventType at use site
+  event_lat: number
+  event_lng: number
+  first_detection_time: string | null
+  newest_signal_at: string | null  // use for relative-time in row header
+  headline_hint: string            // muted subtitle from signal description — NOT a location label
+  signal_count: number
+  signals_by_category: {
+    WESTERN:     RecentSignal[]
+    RUSSIAN:     RecentSignal[]
+    MIDDLE_EAST: RecentSignal[]
+    OSINT:       RecentSignal[]
+  }
+}
+
 export interface Analysis {
   what_is_confirmed: string
   what_is_disputed: string

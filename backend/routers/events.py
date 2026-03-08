@@ -125,6 +125,103 @@ def get_recent_signals(limit: int = 100, db: Session = Depends(get_db)):
     ]
 
 
+@router.get("/signals/recent-grouped")
+def get_recent_signals_grouped(limit: int = 20, db: Session = Depends(get_db)):
+    """Return recent signals grouped by event, with per-category buckets.
+    Excludes GDELT (source == 'GDELT') — GDELT is background event-generation data,
+    not perspective media. LOCAL is excluded from v1 layout.
+    Looks at the 300 most recent non-GDELT signals, groups by event_id,
+    returns the top `limit` event groups ordered by newest signal desc.
+    """
+    PERSPECTIVE_CATS = ["WESTERN", "RUSSIAN", "MIDDLE_EAST", "OSINT"]
+    MAX_PER_CAT = 3
+    RAW_LIMIT = 300
+
+    rows = (
+        db.query(Signal, Event)
+        .join(Event, Signal.event_id == Event.id)
+        .filter(Signal.source != "GDELT")
+        .order_by(Signal.published_at.desc())
+        .limit(RAW_LIMIT)
+        .all()
+    )
+
+    # Group signals by event_id
+    groups: dict = {}
+    for sig, evt in rows:
+        eid = evt.id
+        if eid not in groups:
+            groups[eid] = {
+                "event_id":             evt.id,
+                "event_type":           evt.event_type.value,
+                "event_lat":            evt.lat,
+                "event_lng":            evt.lng,
+                "first_detection_time": evt.first_detection_time.isoformat() if evt.first_detection_time else None,
+                "headline_hint":        None,
+                "_newest_ts":           evt.first_detection_time,  # deterministic fallback
+                "_signals":             [],
+            }
+        groups[eid]["_signals"].append(sig)
+        ts = sig.published_at
+        if ts and (groups[eid]["_newest_ts"] is None or ts > groups[eid]["_newest_ts"]):
+            groups[eid]["_newest_ts"] = ts
+
+    # Sort by newest signal descending — datetime.min.replace(tzinfo=timezone.utc) as fallback
+    # avoids int/datetime mixing and TypeError on None values
+    ordered = sorted(
+        groups.values(),
+        key=lambda g: g["_newest_ts"] or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )[:limit]
+
+    result = []
+    for g in ordered:
+        sigs = g.pop("_signals")
+        newest_ts = g.pop("_newest_ts")
+
+        # headline_hint: best-effort snippet from newest non-empty signal description.
+        # Muted subtitle — NOT a canonical location label.
+        headline_hint = "No summary available"
+        for s in sorted(sigs, key=lambda x: x.published_at, reverse=True):
+            if s.description:
+                snippet = s.description.strip()
+                if len(snippet) > 40:
+                    cut = snippet.rfind(" ", 0, 40)
+                    snippet = (snippet[:cut] if cut > 0 else snippet[:40]).rstrip() + "..."
+                headline_hint = snippet
+                break
+        g["headline_hint"] = headline_hint
+
+        # Expose newest_signal_at for frontend relative-time display in row header
+        g["newest_signal_at"] = newest_ts.isoformat() if newest_ts else None
+
+        # Build per-category buckets (top MAX_PER_CAT newest each)
+        # Deduplicate by signal id within each bucket
+        by_cat: dict = {cat: [] for cat in PERSPECTIVE_CATS}
+        seen_ids: set = set()
+        for s in sorted(sigs, key=lambda x: x.published_at, reverse=True):
+            if s.id in seen_ids:
+                continue
+            cat = s.source_category.value
+            if cat in by_cat and len(by_cat[cat]) < MAX_PER_CAT:
+                by_cat[cat].append({
+                    "id":              s.id,
+                    "source":          s.source,
+                    "source_category": cat,
+                    "article_url":     s.article_url,
+                    "published_at":    s.published_at.isoformat() if s.published_at else None,
+                    "description":     s.description,
+                })
+                seen_ids.add(s.id)
+
+        g["signals_by_category"] = by_cat
+        # Total signals across perspective categories (excludes LOCAL etc.)
+        g["signal_count"] = sum(len(v) for v in by_cat.values())
+        result.append(g)
+
+    return result
+
+
 @router.get("/events/{event_id}/analysis")
 def get_event_analysis(event_id: str, db: Session = Depends(get_db)):
     event = db.query(Event).filter(Event.id == event_id).first()

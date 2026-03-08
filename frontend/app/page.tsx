@@ -13,7 +13,6 @@ import SatelliteLayer from '../components/SatelliteLayer'
 import SatelliteHoverCard from '../components/SatelliteHoverCard'
 import type { GlobeHandle } from '../components/Globe'  // type only — not passed via ref
 import SignalFeed from '../components/SignalFeed'
-import type { RecentSignal } from '@/types'
 
 // Dynamic imports with ssr: false — must never run on server
 const GlobeComponent = dynamic(() => import('../components/Globe'), { ssr: false })
@@ -109,12 +108,18 @@ export default function Home() {
 
   // Handle signal click from the SIGNAL tab — reconstruct a minimal ConflictEvent,
   // switch to GLOBE, and open the NarrativePanel for that event.
-  function handleSignalFromFeed(signal: RecentSignal) {
+  function handleSignalFromFeed(signal: {
+    event_id:    string
+    event_type:  string
+    event_lat:   number
+    event_lng:   number
+    published_at: string | null
+  }) {
     setSelectedEvent({
       id:                   signal.event_id,
       lat:                  signal.event_lat,
       lng:                  signal.event_lng,
-      event_type:           signal.event_type,
+      event_type:           signal.event_type as EventType,
       confidence:           'REPORTED',
       first_detection_time: signal.published_at ?? '',
       signal_count:         1,
