@@ -28,6 +28,20 @@ export interface Signal {
   article_url: string | null
 }
 
+// Used by the SIGNAL tab feed — includes event context for globe navigation
+export interface RecentSignal {
+  id: string
+  event_id: string
+  event_type: EventType
+  event_lat: number
+  event_lng: number
+  source: string
+  source_category: SourceCategory
+  article_url: string | null
+  published_at: string | null
+  description: string | null
+}
+
 export interface Analysis {
   what_is_confirmed: string
   what_is_disputed: string

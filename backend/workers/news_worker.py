@@ -117,7 +117,7 @@ def _get_source_category(url: str | None) -> str:
     return "WESTERN"  # fallback — may overclassify unknown outlets as Western
 
 
-def _find_matching_events(db, article_text: str) -> list:
+def _find_matching_events(db, article_text: str) -> list[Event]:
     """
     Return up to 2 best-matching events for this article.
     Events are scored by number of unique matched location terms.
@@ -238,7 +238,7 @@ def ingest_news(db) -> None:
                 # Deterministic fallback — avoids published_at instability across reruns
                 ts = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
-            article_text   = f"{title} {description}"
+            article_text = f"{title} {description}".strip()
             matched_events = _find_matching_events(db, article_text)
 
             if not matched_events:

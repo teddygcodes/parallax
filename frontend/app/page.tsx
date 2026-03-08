@@ -12,6 +12,8 @@ import AmbientSound from '../components/AmbientSound'
 import SatelliteLayer from '../components/SatelliteLayer'
 import SatelliteHoverCard from '../components/SatelliteHoverCard'
 import type { GlobeHandle } from '../components/Globe'  // type only — not passed via ref
+import SignalFeed from '../components/SignalFeed'
+import type { RecentSignal } from '@/types'
 
 // Dynamic imports with ssr: false — must never run on server
 const GlobeComponent = dynamic(() => import('../components/Globe'), { ssr: false })
@@ -105,6 +107,21 @@ export default function Home() {
     setSelectedEvent(null)
   }
 
+  // Handle signal click from the SIGNAL tab — reconstruct a minimal ConflictEvent,
+  // switch to GLOBE, and open the NarrativePanel for that event.
+  function handleSignalFromFeed(signal: RecentSignal) {
+    setSelectedEvent({
+      id:                   signal.event_id,
+      lat:                  signal.event_lat,
+      lng:                  signal.event_lng,
+      event_type:           signal.event_type,
+      confidence:           'REPORTED',
+      first_detection_time: signal.published_at ?? '',
+      signal_count:         1,
+    })
+    setActiveTab('GLOBE')
+  }
+
   // Receive current events from Globe for LivingEarthMode camera drift
   function handleEventsUpdate(events: ConflictEvent[]) {
     setCurrentEvents(events)
@@ -175,7 +192,7 @@ export default function Home() {
           display: 'flex',
           gap: '36px',
         }}>
-          {(['GLOBE'] as Tab[]).map(tab => (
+          {(['GLOBE', 'SIGNAL'] as Tab[]).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -285,26 +302,9 @@ export default function Home() {
         />
       )}
 
-      {/* SIGNAL tab — placeholder only in Phase 2. Full tab is Phase 3. */}
+      {/* SIGNAL tab — live perspectival feed */}
       {!isLivingEarth && activeTab === 'SIGNAL' && (
-        <div style={{
-          position: 'absolute',
-          inset: 0,
-          background: '#0a0a0e',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 2,
-        }}>
-          <span style={{
-            fontFamily: 'IBM Plex Mono, monospace',
-            fontSize: '13px',
-            letterSpacing: '0.12em',
-            color: '#8a8a8a',
-          }}>
-            SIGNAL FEED INITIALIZING...
-          </span>
-        </div>
+        <SignalFeed onSignalClick={handleSignalFromFeed} />
       )}
 
       {/* Living Earth Mode orchestrator */}

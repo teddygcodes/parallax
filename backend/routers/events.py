@@ -96,6 +96,35 @@ def get_event_signals(event_id: str, db: Session = Depends(get_db)):
     ]
 
 
+@router.get("/signals/recent")
+def get_recent_signals(limit: int = 100, db: Session = Depends(get_db)):
+    """Return the most recent signals across all events, newest first.
+    Joins Event to include event_type, lat, lng for client-side event reconstruction.
+    """
+    rows = (
+        db.query(Signal, Event)
+        .join(Event, Signal.event_id == Event.id)
+        .order_by(Signal.published_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id":              sig.id,
+            "event_id":        sig.event_id,
+            "event_type":      evt.event_type.value,
+            "event_lat":       evt.lat,
+            "event_lng":       evt.lng,
+            "source":          sig.source,
+            "source_category": sig.source_category.value,
+            "article_url":     sig.article_url,
+            "published_at":    sig.published_at.isoformat() if sig.published_at else None,
+            "description":     sig.description,
+        }
+        for sig, evt in rows
+    ]
+
+
 @router.get("/events/{event_id}/analysis")
 def get_event_analysis(event_id: str, db: Session = Depends(get_db)):
     event = db.query(Event).filter(Event.id == event_id).first()
